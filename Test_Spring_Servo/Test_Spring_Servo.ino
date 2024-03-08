@@ -148,7 +148,7 @@ void writeServos() {
 
     if (currentFeedback + 70 < feedback) {  // Pulls forks inward
       currentAngle++;
-    } else if (currentFeedback - 20 > feedback) {  // Push forks outward
+    } else if (currentFeedback - 17 > feedback) {  // Push forks outward
       currentAngle--;
     } else if (targetAngle > currentAngle) {
       currentAngle++;
