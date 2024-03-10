@@ -15,24 +15,27 @@ const int dirPlantPin = 18;
 
 // defines servo pin number (from pin 3 to 8)
 unsigned long lastServoUpdate = 0;
-const int servoTransPin = 3;
-const int feedbackPin = 24;  // Tx J4 feedback is on 3.3V
-//const int servoGripperPin = 4;
+const int servoForksPin = 3;
+const int feedbackPin = 24;  // Tx J4, feedback from servo is on 3.3V
+const int servoGripperPin = 4;
 const int servoArmPin = 5;
-//const int servoWheelPin = 6;
+const int servoWheelPin = 6;
 
 const int angleRetracted = 0;
-const int angleDeployed = 145;
+const int angleDeployed = 150;  // if changes value need to change feedback too !
 int targetAngleTrans = angleDeployed;
 int targetAngleArm = 0;
-int angleArm = 0;
+int angleArm = targetAngleArm;
 int currentAngleTrans = 0;
 int currentFeedbackTrans = 0;
 int angle = 0;
 int feedback = 0;
+unsigned int timeout = 10000;
 int minFeedback = 600;   // Based on a 12 bits resolution
 int maxFeedback = 2485;  // 180° : 2485
-int deployedFeedback = 2009;
+int deployedFeedback = 2170;
+int angleGripper = 90;
+int speedWheel = 90;
 
 // µs1 = 32, µs2 = 31, µs3 = 30, µs4 = 27
 const int microswitchPotPin = 27;    // Green cable
@@ -48,8 +51,7 @@ int homingCompleted = 0;
 const int stepsPerRev = 200;
 const int microstepping = 8;
 const float ratio = 7.5;
-const int steps = round(stepsPerRev * ratio * 1.1) * microstepping;  // Reduction 7.5:1
-//const int stepsPot = round(stepsPerRev * ratio * 1.3) * microstepping;    // Reduction 7.5:1
+const int steps = round(stepsPerRev * ratio * 1.55) * microstepping;  // Reduction 7.5:1
 
 int plantHasPriority = 1;
 int targetPositionForkPlant = steps;
@@ -62,7 +64,7 @@ int state = HIGH;
 unsigned long LEDCurrentDelay = 1000;
 const unsigned long LEDDelay = 500;
 const unsigned long LEDDelayWarning = 100;
-unsigned long previousLED = 0;  // will store last time led state changed
+unsigned long previousLED = 0;
 
 
 // Serial input variables
@@ -71,19 +73,19 @@ char receivedChars[numChars];
 boolean newData = false;
 
 
-// Objects declaration
+// Object declaration
 AccelStepper stepperPlant(AccelStepper::DRIVER, stepPlantPin, dirPlantPin);
 AccelStepper stepperPot(AccelStepper::DRIVER, stepPotPin, dirPotPin);
 
-PWMServo servoTrans;
-//PWMServo servoGripper;
+PWMServo servoForks;
+PWMServo servoGripper;
 PWMServo servoArm;
-//PWMServo servoWheel;
+PWMServo servoWheel;
 
 
 void setup() {
   SERIAL_BEGIN(115200);
-  //DBG_PRINTF("\n\nStarting\nSteps : %d\n", steps);
+  DBG_PRINTF("\nStarting\nSteps : %d\n", steps);
 
   pinMode(LEDPin, OUTPUT);
 
@@ -91,17 +93,12 @@ void setup() {
   pinMode(microswitchPlantPin, INPUT_PULLUP);
 
   setupServos();
-  //setupSteppers();
-  //setupSteppers();
-  homingCompleted=1;
+  setupSteppers();
 
-  DBG_PRINTLN("Setups done");
+  DBG_PRINTLN("\nSetups done");
 }
 
 void loop() {
-  // Handle translation and lifting of forks, arm and wheel to avoid perimeter problems
-  // Plant's fork height should always be higher than the pot's fork
-  // Forks should be put to there parking position to be retracted
   recvWithStartEndMarkers();
 
   if (millis() - previousLED > LEDCurrentDelay) {
@@ -118,6 +115,7 @@ void loop() {
 
   readServo(0);
   writeServos();
+
 
   int posPlant = targetPositionForkPlant;
   int posPot = targetPositionForkPot;
@@ -142,7 +140,7 @@ int homing(int speed) {
   stepperPot.setMaxSpeed(speed);  // Used by runToNewPosition()
   stepperPlant.setMaxSpeed(speed);
 
-  DBG_PRINTLN("Moving pot's fork away from the switch");
+  DBG_PRINTLN("\nMoving pot's fork away from the switch");
   int statusPot = homingMove(&stepperPot, -speed, steps * 0.1, microswitchPotPin, true);
   DBG_PRINTLN("Moving plant's fork away from the switch");
   int statusPlant = homingMove(&stepperPlant, -speed, steps * 0.1, microswitchPlantPin, true);
@@ -232,18 +230,33 @@ void setTranslationForks(int translation) {
   }
 }
 
-void setRotationArm(int angle) {
-  if (angle >= 0 && angle <= 180) {
-    targetAngleArm = angle;
-  }
-}
-
 /*
  * State = 0 : gripper is open
  * State = 1 : gripper is closed
  */
-void setPositionGripper(int state) {
-  //(state) ? servoGripper.write(0) : servoGripper.write(40);
+void setPositionGripper(int angle) {
+  if (angle <= 180 && angle >= 0) {
+    angleGripper = 180 - angle;
+  }
+}
+
+void setRotationArm(int angle) {
+  if (angle >= 0 && angle <= 105) {
+    targetAngleArm = 105 - angle;
+  }
+}
+
+void setSpeedWheel(int speed) {
+  //DBG_PRINTF("Speed : %d\n", speed);
+  if (speed >= -10 && speed <= 10) {
+    if (speed == 0) {
+      speedWheel = 90;
+    } else if (speed > 0) {
+      speedWheel = map(speed, 0, 10, 140, 155);
+    } else {
+      speedWheel = map(speed, 0, -10, 35, 20);
+    }
+  }
 }
 
 // returns true if switch is pressed
@@ -300,16 +313,16 @@ void handleCommand(char *string) {
       stepperPlant.enableOutputs();
       stepperPot.enableOutputs();
       break;
-    case 'F':  // Fork pot
-      plantHasPriority = 0;
-      setTargetForkPot(value);
-      break;
     case 'f':  // Fork plant
       plantHasPriority = 1;
       setTargetForkPlant(value);
       break;
+    case 'F':  // Fork pot
+      plantHasPriority = 0;
+      setTargetForkPot(value);
+      break;
     case 'G':  // Plants gripper
-      DBG_PRINTLN("Plants gripper");
+      setPositionGripper(value);
       break;
     case 'O':
       DBG_PRINTLN("Preparing for power down");
@@ -320,6 +333,9 @@ void handleCommand(char *string) {
       break;
     case 'T':  // Forks translation
       setTranslationForks(value);
+      break;
+    case 'W':
+      setSpeedWheel(value);
       break;
     default:
       DBG_PRINTLN("Command not recognized !");
@@ -353,6 +369,7 @@ void writeServos() {
   if (millis() - lastServoWrite > 3) {
     lastServoWrite = millis();
 
+    // Servo translation forks
     if (currentFeedbackTrans + 70 < feedback) {  // Pulls forks inward
       currentAngleTrans++;
     } else if (currentFeedbackTrans - 16 > feedback) {  // Push forks outward
@@ -364,16 +381,20 @@ void writeServos() {
     }
     currentAngleTrans = constrain(currentAngleTrans, 0, 180);
     currentFeedbackTrans = angleToFb(currentAngleTrans);
-    // Can use servo.writeMicroseconds() if want higher resolution than 1°
-    servoTrans.write(currentAngleTrans);
+    servoForks.write(currentAngleTrans);
 
+    // Servo gripper
+    servoGripper.write(angleGripper);
+
+    // Servo rotation arm
     if (targetAngleArm > angleArm) {
       angleArm++;
     } else if (targetAngleArm < angleArm) {
       angleArm--;
     }
     servoArm.write(angleArm);
-    //DBG_PRINTF("AngleArm : %d\n", angleArm);
+
+    servoWheel.write(speedWheel);
   }
 }
 
@@ -421,25 +442,28 @@ void setupSteppers() {
 }
 
 void setupServos() {
-  pinMode(servoTransPin, OUTPUT);
+  pinMode(servoForksPin, OUTPUT);
+  pinMode(servoGripperPin, OUTPUT);
   pinMode(servoArmPin, OUTPUT);
+  pinMode(servoWheelPin, OUTPUT);
   pinMode(feedbackPin, INPUT);
-
-  servoTrans.attach(servoTransPin, 500, 2500);
   analogReadResolution(12);
 
-  //servoArm.attach(servoArmPin, 1000, 2000); // Tested from 750 t0 2350. 800 to 2300 gives 180° (to check !)
-  servoArm.attach(servoArmPin, 500, 2500); // Used for solar panel rotation
-  // Servo gripper : datasheet 500-2500
-
+  servoForks.attach(servoForksPin, 500, 2500);
   readServo(1);
   currentAngleTrans = angle;
   currentFeedbackTrans = feedback;
 
-  DBG_PRINTF("Min feedback : %d\t max feedback : %d\n", minFeedback, maxFeedback);
-  //calibration(&servoTrans, angleRetracted, &minFeedback);
-  //calibration(&servoTrans, angleDeployed, &deployedFeedback);
-  DBG_PRINTF("Min feedback : %d\t max feedback : %d\n", minFeedback, maxFeedback);
+  servoGripper.attach(servoGripperPin, 500, 2500);  // datasheet 500-2500
+
+  servoArm.attach(servoArmPin, 800, 2320);  // datasheet 700-2300. Tested from 740 to 2380 without stalling.
+
+  servoWheel.attach(servoWheelPin, 1400, 1600);  // datasheet 500-2500
+
+  DBG_PRINTF("Min feedback : %d\t deployed feedback : %d\n", minFeedback, deployedFeedback);
+  calibration(&servoForks, angleRetracted, &minFeedback);
+  calibration(&servoForks, angleDeployed, &deployedFeedback);
+  DBG_PRINTF("Min feedback : %d\t deployed feedback : %d\n", minFeedback, deployedFeedback);
 }
 
 /*
@@ -458,7 +482,7 @@ void calibration(PWMServo *servo, int a, int *oldFb) {
   targetAngleTrans = a;
 
   float error = 20.0;
-  while ((abs(angle - a) > 1 || error > 0.01) && time < start + 10000) {
+  while ((abs(angle - a) > 1 || error > 0.01) && time < start + timeout) {
     writeServos();
     readServo(1);
     lastFb = fb;
@@ -468,14 +492,17 @@ void calibration(PWMServo *servo, int a, int *oldFb) {
     //DBG_PRINTF("angle : %d, error : %.3f, time : %d\n", angle, error, start+10000 - time);
     delay(1);
   }
+  time = millis() - start;
 
   delay(100);  // wait for the servo to stop moving
   readServo(1);
 
-  if (abs(*oldFb - feedback) < 20) {
+  if (abs(*oldFb - feedback) < 25) {
     *oldFb = feedback;
-    DBG_PRINTF("Calibration successful\n  New feedback value : %d\n", feedback);
+    DBG_PRINTF("Calibration completed in %dms\n  New feedback value : %d\n", time, feedback);
+  } else if (time >= timeout) {
+    DBG_PRINTLN("Calibration failed : timeout");
   } else {
-    DBG_PRINTLN("Calibration failed\n  Value outside range");
+    DBG_PRINTF("Calibration failed : value outside range : %d\n", feedback);
   }
 }
