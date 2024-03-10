@@ -22,7 +22,7 @@ const int servoArmPin = 5;
 const int servoWheelPin = 6;
 
 const int angleRetracted = 0;
-const int angleDeployed = 150;  // if changes value need to change feedback too !
+const int angleDeployed = 155;  // if changes value need to change feedback too !
 int targetAngleTrans = angleDeployed;
 int targetAngleArm = 0;
 int angleArm = targetAngleArm;
@@ -34,8 +34,9 @@ unsigned int timeout = 10000;
 int minFeedback = 600;   // Based on a 12 bits resolution
 int maxFeedback = 2485;  // 180° : 2485
 int deployedFeedback = 2170;
-int angleGripper = 90;
-int speedWheel = 90;
+int angleGripper = 180;
+int speedRange = 50;
+int speedWheel = 0;
 
 // µs1 = 32, µs2 = 31, µs3 = 30, µs4 = 27
 const int microswitchPotPin = 27;    // Green cable
@@ -51,7 +52,7 @@ int homingCompleted = 0;
 const int stepsPerRev = 200;
 const int microstepping = 8;
 const float ratio = 7.5;
-const int steps = round(stepsPerRev * ratio * 1.55) * microstepping;  // Reduction 7.5:1
+const int steps = round(stepsPerRev * ratio * 1.58) * microstepping;  // Reduction 7.5:1
 
 int plantHasPriority = 1;
 int targetPositionForkPlant = steps;
@@ -92,8 +93,13 @@ void setup() {
   pinMode(microswitchPotPin, INPUT_PULLUP);
   pinMode(microswitchPlantPin, INPUT_PULLUP);
 
-  setupServos();
   setupSteppers();
+  if (homingCompleted) {
+    setTargetForkPot(50);
+    setTargetForkPlant(50);
+  }
+
+  setupServos();
 
   DBG_PRINTLN("\nSetups done");
 }
@@ -142,16 +148,16 @@ int homing(int speed) {
 
   DBG_PRINTLN("\nMoving pot's fork away from the switch");
   int statusPot = homingMove(&stepperPot, -speed, steps * 0.1, microswitchPotPin, true);
-  DBG_PRINTLN("Moving plant's fork away from the switch");
-  int statusPlant = homingMove(&stepperPlant, -speed, steps * 0.1, microswitchPlantPin, true);
-
   if (statusPot == 2) {
     stepperPot.setCurrentPosition(0);
-    stepperPot.runToNewPosition(-400);
+    stepperPot.runToNewPosition(-steps * 0.03);
   }
+
+  DBG_PRINTLN("Moving plant's fork away from the switch");
+  int statusPlant = homingMove(&stepperPlant, -speed, steps * 0.1, microswitchPlantPin, true);
   if (statusPlant == 2) {
     stepperPlant.setCurrentPosition(0);
-    stepperPlant.runToNewPosition(-400);
+    stepperPlant.runToNewPosition(-steps * 0.03);
   }
 
   if (statusPlant) {
@@ -235,27 +241,25 @@ void setTranslationForks(int translation) {
  * State = 1 : gripper is closed
  */
 void setPositionGripper(int angle) {
-  if (angle <= 180 && angle >= 0) {
+  if (angle == 1 || angle == 0) {
+    angleGripper = angle ? 0 : 180;
+  } else if (angle >= 2 && angle <= 180) {
     angleGripper = 180 - angle;
   }
 }
 
 void setRotationArm(int angle) {
-  if (angle >= 0 && angle <= 105) {
+  if (angle == 0 || angle == 1) {
+    targetAngleArm = (angle) ? 0 : 105;
+  } else if (angle >= 2 && angle <= 105) {
     targetAngleArm = 105 - angle;
   }
 }
 
 void setSpeedWheel(int speed) {
-  //DBG_PRINTF("Speed : %d\n", speed);
-  if (speed >= -10 && speed <= 10) {
-    if (speed == 0) {
-      speedWheel = 90;
-    } else if (speed > 0) {
-      speedWheel = map(speed, 0, 10, 140, 155);
-    } else {
-      speedWheel = map(speed, 0, -10, 35, 20);
-    }
+  DBG_PRINTF("Speed : %d\n", speed);
+  if (speed >= -speedRange && speed <= speedRange) {
+    speedWheel = speed;
   }
 }
 
@@ -364,10 +368,13 @@ void readServo(int forceUpdate) {
 }
 
 void writeServos() {
+  static unsigned long lastServoWheelWrite = 0;
   static unsigned long lastServoWrite = 0;
+  static int pwm = 0;
 
-  if (millis() - lastServoWrite > 3) {
-    lastServoWrite = millis();
+  unsigned long time = millis();
+  if (time - lastServoWrite > 3) {
+    lastServoWrite = time;
 
     // Servo translation forks
     if (currentFeedbackTrans + 70 < feedback) {  // Pulls forks inward
@@ -393,8 +400,21 @@ void writeServos() {
       angleArm--;
     }
     servoArm.write(angleArm);
+  }
 
-    servoWheel.write(speedWheel);
+  if (time - lastServoWheelWrite > 1) {
+    lastServoWheelWrite = time;
+
+    //DBG_PRINTF("pwm : %d ", pwm);
+    if (abs(speedWheel) > pwm) {
+      int value = (speedWheel > 0) ? 160 : 20;
+      servoWheel.write(value);
+      //DBG_PRINTLN("ON");
+    } else {
+      servoWheel.write(90);
+      //DBG_PRINTLN("OFF");
+    }
+    pwm = (pwm + 1) % speedRange;
   }
 }
 
