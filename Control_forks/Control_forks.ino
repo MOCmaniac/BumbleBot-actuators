@@ -22,7 +22,7 @@ const int SERVO_PIN[] = { 3, 4, 5, 6 };
 const int SERVO_MIN[] = { 0, 0, 0, -50 };
 const int SERVO_DEPLOYED[] = { 155, 180, 105, 0 };  // if changes value fork SERVO_FORKS need to change feedback too !
 const int SERVO_MAX[] = { 170, 180, 115, 50 };      // SERVO_MAX[3] = -SERVO_MIN[3]
-int SERVO_TARGET[] = { 155, 0, 0, 90 };
+int SERVO_TARGET[] = { 0, 0, 0, 90 };
 int SERVO_ALLOWED[] = { 0, 0, 0, 0 };
 
 unsigned long lastServoUpdate = 0;
@@ -42,7 +42,7 @@ const int microswitchPlantPin = 30;  // Blue cable
 
 // TMC2209 : interpolation to 256 microsteps
 const int homingSpeed = 5000;  // max found : 16000 steps/second
-const int forkSpeed = 4000;
+const int forkSpeed = 10000;
 const int forkAcceleration = 40e3;  // in steps/second²
 int homingCompleted = 0;
 int maxHeight = 100;
@@ -113,6 +113,7 @@ void setup() {
     }
     setupServos();
   }
+  setTranslationForks(0);
 }
 
 void loop() {
@@ -289,7 +290,7 @@ void writeServos() {
   static int pwm = 0;
 
   unsigned long time = millis();
-  if (time - lastServoWrite > 20) {  // 3
+  if (time - lastServoWrite > 3) {  // 3
     lastServoWrite = time;
 
     // Servo translation forks
