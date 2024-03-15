@@ -6,14 +6,16 @@ unsigned long lastServoUpdate = 0;
 const int servoTransPin = 3;
 const int feedbackPin = 24;  // Tx J4 feedback is on 3.3V
 
+unsigned int timeout = 15000;
+
 int targetAngle = 0;
-int currentAngle = 0;
-int angle = 0;
-int currentFeedback = 0;
-int feedback = 0;
-int minFeedback = 600;  // Based on a 12 bits resolution
-int maxFeedback = 2485; // 180° : 2485
-int deployedFeedback = 2009;
+int allowedAngle = 0;
+int angleMeasured = 0;
+int allowedFeedback = 0;
+int feedbackMeasured = 0;
+int minFeedback = 600;   // Based on a 12 bits resolution
+int maxFeedback = 2485;  // 180° : 2485
+int deployedFeedback = 2010;
 const int angleRetracted = 0;
 const int angleDeployed = 135;
 
@@ -71,8 +73,8 @@ void loop() {
   static unsigned long lastMillis = millis();
   if (millis() - lastMillis > 100) {
     lastMillis = millis();
-    DBG_PRINTF("Target angle : %d\tCurrent angle : %d\tAngle : %d\tCurrent feedback : %d\tFeedback : %d\tError : %d\n",
-               targetAngle, currentAngle, angle, currentFeedback, feedback, currentFeedback - feedback);
+    DBG_PRINTF("Target angle : %d\tAllowed angle : %d\tMeasured angle : %d\tAllowed feedback : %d\tMeasured feedback : %d\tError : %d\n",
+               targetAngle, allowedAngle, angleMeasured, allowedFeedback, feedbackMeasured, allowedFeedback - feedbackMeasured);
   }
 }
 
@@ -82,7 +84,7 @@ void loop() {
  */
 void setTranslationForks(int translation) {
   if (translation == 0 || translation == 1) {
-    targetAngle = (translation) ? 135 : 0;
+    targetAngle = (translation) ? angleDeployed : 0;
   } else if (translation >= 2 && translation <= 180) {
     targetAngle = translation;
   }
@@ -143,25 +145,26 @@ void handleCommand(char *string) {
 void writeServos() {
   static unsigned long lastServoWrite = 0;
 
+
   if (millis() - lastServoWrite > 3) {
     lastServoWrite = millis();
 
-    if (currentFeedback + 70 < feedback) {  // Pulls forks inward
-      currentAngle++;
-    } else if (currentFeedback - 17 > feedback) {  // Push forks outward
-      currentAngle--;
-    } else if (targetAngle > currentAngle) {
-      currentAngle++;
-    } else if (targetAngle < currentAngle) {
-      currentAngle--;
+    if (allowedFeedback + 70 < feedbackMeasured) {  // Pulls forks inward
+      allowedAngle++;
+    } else if (allowedFeedback - 12 > feedbackMeasured) {  // Push forks outward
+      allowedAngle--;
+    } else if (targetAngle > allowedAngle) {
+      allowedAngle++;
+    } else if (targetAngle < allowedAngle) {
+      allowedAngle--;
     }
   }
-  currentAngle = constrain(currentAngle, 0, 180);
-  currentFeedback = angleToFb(currentAngle);
+  allowedAngle = constrain(allowedAngle, 0, 180);
+  allowedFeedback = angleToFb(allowedAngle);
 
 
   // Can use servo.writeMicroseconds() if want higher resolution than 1°
-  servoTrans.write(currentAngle);
+  servoTrans.write(allowedAngle);
 }
 
 // Returns value from the angle according to the feedback
@@ -179,8 +182,29 @@ void readServo(int forceUpdate) {
     FB = round(fb / 5);
   }
 
-  feedback = FB;
-  angle = map(FB, minFeedback, maxFeedback, 0, 180);  // map function does not constraint
+  feedbackMeasured = FB;
+  angleMeasured = map(FB, minFeedback, maxFeedback, 0, 180);  // map function does not constraint
+}
+
+void readServoEMA(int forceUpdate) {
+  static unsigned long lastServoRead = 0;
+  static float fb = 0;
+
+  if (fb == 0) {
+    for (int x = 0; x < 5; x++) {
+      fb += analogRead(feedbackPin);
+    }
+    fb = round(fb / 5);
+  }
+
+  unsigned long time = millis();
+  if (time - lastServoRead > 2 || forceUpdate) {
+    lastServoRead = time;
+    fb = 0.99 * fb + 0.01 * analogRead(feedbackPin);
+  }
+
+  feedbackMeasured = round(fb);
+  angleMeasured = map(feedbackMeasured, minFeedback, maxFeedback, 0, 180);  // map function does not constraint
 }
 
 
@@ -203,34 +227,38 @@ int fbToAngle(int fb) {
 void calibration(PWMServo *servo, int a, int *oldFb) {
   DBG_PRINTF("\n\nStarting calibration for angle : %d, old feedback : %d\n", a, *oldFb);
   readServo(1);
-  DBG_PRINTF("Current angle : %d, current feedback : %d\n", angle, feedback);
+  DBG_PRINTF("Measured angle : %d, measured feedback : %d\n", angleMeasured, feedbackMeasured);
   unsigned long start = millis();
   unsigned long time = start;
-  float fb = feedback;
+  float fb = feedbackMeasured;
   float lastFb = *oldFb;
-  //servo.write(angle); // library already constrain written angle value
+  //servo.write(angleMeasured); // library already constrain written angle value
   targetAngle = a;
 
-  float error = 10.0;
-  while ((abs(angle-a) > 1 || error > 0.01) && time < start + 10000) {
+  float error = 20.0;
+  while ((abs(angleMeasured - a) > 1 || error > 0.01) && time < start + timeout) {
     writeServos();
-    readServo(1);
+    readServo(0);
     lastFb = fb;
-    fb = 0.98 * fb + 0.02 * feedback;
+    fb = 0.98 * fb + 0.02 * feedbackMeasured;
     error = abs(fb - lastFb);
     time = millis();
-    //DBG_PRINTF("angle : %d, error : %.3f, time : %d\n", angle, error, start+10000 - time);
+    //DBG_PRINTF("angleMeasured : %d, error : %.3f, time : %d\n", angleMeasured, error, start+10000 - time);
     delay(1);
   }
-
+  time = millis() - start;
+  
+  writeServos();
   delay(100);  // wait for the servo to stop moving
   readServo(1);
 
-  if (abs(*oldFb - feedback) < 20) {
-    *oldFb = feedback;
-    DBG_PRINTF("Calibration successful\n  New feedback value : %d\n", feedback);
+  if (abs(*oldFb - feedbackMeasured) < 25) {
+    *oldFb = feedbackMeasured;
+    DBG_PRINTF("Calibration completed in %dms\n  New feedback value : %d\n", time, feedbackMeasured);
+  } else if (time >= timeout) {
+    DBG_PRINTLN("Calibration failed : timeout");
   } else {
-    DBG_PRINTLN("Calibration failed\n  Value outside range");
+    DBG_PRINTF("Calibration failed : value outside range : %d\n", feedbackMeasured);
   }
 }
 
@@ -242,8 +270,8 @@ void setupServos() {
   analogReadResolution(12);
 
   readServo(1);
-  currentAngle = angle;
-  currentFeedback = feedback;
+  allowedAngle = angleMeasured;
+  allowedFeedback = feedbackMeasured;
 
   DBG_PRINTF("Min feedback : %d\t max feedback : %d\n", minFeedback, maxFeedback);
   calibration(&servoTrans, angleRetracted, &minFeedback);

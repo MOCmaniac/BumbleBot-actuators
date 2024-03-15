@@ -26,12 +26,12 @@ int SERVO_TARGET[] = { 0, 0, 0, 90 };
 int SERVO_ALLOWED[] = { 0, 0, 0, 0 };
 
 unsigned long lastServoUpdate = 0;
-unsigned int timeout = 10000;
+unsigned int timeout = 15000;
 int allowedFeedbackForks = 0;
 int angleMeasured = 0;
 int feedbackMeasured = 0;
 int minFeedback = 600;  // Based on a 12 bits resolution
-int deployedFeedback = 2225;
+int deployedFeedback = 2225; // 135°:2010 - 155°:2225
 int maxFeedback = 2485;  // 180° : 2485
 
 
@@ -46,14 +46,13 @@ const int forkSpeed = 10000;
 const int forkAcceleration = 40e3;  // in steps/second²
 int homingCompleted = 0;
 int maxHeight = 100;
-int parkingHeight = 50;
+int parkingHeight = 17;
 
 const int stepsPerRev = 200;
 const int microstepping = 8;
 const float ratio = 7.5;
 const int steps = round(stepsPerRev * ratio * 1.55) * microstepping;  // Reduction 7.5:1
 
-int armHasPriority = 0;
 int plantHasPriority = 1;
 int targetPositionForkPlant = steps;
 int targetPositionForkPot = steps;
@@ -74,6 +73,18 @@ enum servo {
   SERVO_WHEEL
 };
 
+enum states {
+  RETRACTED = 0,
+  FORKS = 1,
+  ARM = 2,
+};
+
+const char *stateNames[] = {
+  "RETRACTED",
+  "FORKS",
+  "ARM"
+};
+
 
 // Serial input variables
 const byte numChars = 10;
@@ -90,6 +101,7 @@ PWMServo servoGripper;
 PWMServo servoArm;
 PWMServo servoWheel;
 
+enum states state = RETRACTED;
 
 void setup() {
   SERIAL_BEGIN(115200);
@@ -113,7 +125,7 @@ void setup() {
     }
     setupServos();
   }
-  setTranslationForks(0);
+  setState(RETRACTED);
 }
 
 void loop() {
@@ -126,12 +138,13 @@ void loop() {
   }
 
   if (newData) {
-    DBG_PRINTLN("Handling data");
+    //DBG_PRINTLN("Handling data");
     handleCommand(receivedChars);
     newData = false;
   }
 
-  handleSystem();
+  //handleSystem();
+  handleState();
 
   readServo(0);
   writeServos();
@@ -140,50 +153,63 @@ void loop() {
   stepperPot.run();
 }
 
+void setState(states newState) {
+  state = newState;
+}
 
-void handleSystem() {
-  static int lastPriority = 0;
-  if (lastPriority != armHasPriority) {
-    lastPriority = armHasPriority;
-    DBG_PRINTF("Arm has priority : %s\n", armHasPriority ? "YES" : "NO");
+void handleState() {
+  static int lastState = -1;
+  if (state != lastState) {
+    lastState = state;
+    DBG_PRINTF("New state : %s\n", stateNames[state]);
   }
+  switch (state) {
+    case RETRACTED:
+      forksRetracted();
+      armRetracted();
+      break;
+    case ARM:
+      forksRetracted();
 
-  if (armHasPriority) {
-    setTargetForkPlant(parkingHeight);
-    setTargetForkPot(parkingHeight);
-    stepperPlant.moveTo(targetPositionForkPlant);
-    stepperPot.moveTo(targetPositionForkPot);
-
-    if (!stepperPlant.isRunning() && !stepperPot.isRunning()) {
-      SERVO_TARGET[SERVO_FORKS] = SERVO_MIN[SERVO_FORKS];
-    }
-
-    if (SERVO_ALLOWED[SERVO_FORKS] > SERVO_MIN[SERVO_FORKS] + 5) {
-      // bad to directly write the allowed values
-      SERVO_ALLOWED[SERVO_ARM] = SERVO_MIN[SERVO_ARM];
-      SERVO_ALLOWED[SERVO_WHEEL] = SERVO_DEPLOYED[SERVO_WHEEL];
-    }
-  } else {  // fork has priority
-    SERVO_TARGET[SERVO_ARM] = SERVO_MIN[SERVO_ARM];
-    SERVO_TARGET[SERVO_WHEEL] = SERVO_DEPLOYED[SERVO_WHEEL];
-
-    if (SERVO_ALLOWED[SERVO_ARM] > SERVO_MIN[SERVO_ARM] + 3) {
-      // bad to directly write the allowed value
-      SERVO_ALLOWED[SERVO_FORKS] = SERVO_MIN[SERVO_FORKS];
-    }
-
-    if (SERVO_ALLOWED[SERVO_ARM] <= SERVO_MIN[SERVO_ARM]) {
-      int posPlant = targetPositionForkPlant;
-      int posPot = targetPositionForkPot;
-      if (plantHasPriority) {
-        posPot = min(targetPositionForkPot, targetPositionForkPlant);
-      } else {
-        posPlant = max(targetPositionForkPot, targetPositionForkPlant);
+      if (SERVO_ALLOWED[SERVO_FORKS] < SERVO_MIN[SERVO_FORKS] + 5) {
+        SERVO_TARGET[SERVO_ARM] = SERVO_DEPLOYED[SERVO_ARM];
       }
-      stepperPlant.moveTo(posPlant);
-      stepperPot.moveTo(posPot);
-    }
+      break;
+    case FORKS:
+      armRetracted();
+      if (SERVO_ALLOWED[SERVO_ARM] < SERVO_MIN[SERVO_ARM] + 5) {
+        SERVO_TARGET[SERVO_FORKS] = SERVO_DEPLOYED[SERVO_FORKS];
+      }
+
+      if (SERVO_ALLOWED[SERVO_FORKS] > SERVO_DEPLOYED[SERVO_FORKS] - 5) {
+        int posPlant = targetPositionForkPlant;
+        int posPot = targetPositionForkPot;
+        if (plantHasPriority) {
+          posPot = min(targetPositionForkPot, targetPositionForkPlant);
+        } else {
+          posPlant = max(targetPositionForkPot, targetPositionForkPlant);
+        }
+        stepperPlant.moveTo(posPlant);
+        stepperPot.moveTo(posPot);
+      }
+      break;
   }
+}
+
+void forksRetracted() {
+  setTargetForkPlant(parkingHeight);
+  setTargetForkPot(parkingHeight);
+  stepperPlant.moveTo(targetPositionForkPlant);
+  stepperPot.moveTo(targetPositionForkPot);
+
+  if (!stepperPlant.isRunning() && !stepperPot.isRunning()) {
+    SERVO_TARGET[SERVO_FORKS] = SERVO_MIN[SERVO_FORKS];
+  }
+}
+
+void armRetracted() {
+  SERVO_TARGET[SERVO_ARM] = SERVO_MIN[SERVO_ARM];
+  SERVO_TARGET[SERVO_WHEEL] = SERVO_DEPLOYED[SERVO_WHEEL];
 }
 
 /*
@@ -209,20 +235,6 @@ void setTargetForkPot(int height) {
 }
 
 /*
- * translation = 0 : forks are retracted
- * translation = 1 : forks are deployed
- */
-void setTranslationForks(int translation) {
-  if (translation == 0 || translation == 1) {
-    SERVO_TARGET[SERVO_FORKS] = (translation) ? SERVO_DEPLOYED[SERVO_FORKS] : SERVO_MIN[SERVO_FORKS];
-    armHasPriority = translation ? 0 : 1;
-  } else if (translation >= 2 && translation <= SERVO_MAX[SERVO_FORKS]) {
-    SERVO_TARGET[SERVO_FORKS] = translation;
-    armHasPriority = (translation > 5) ? 0 : 1;
-  }
-}
-
-/*
  * angle = 0 : gripper is open
  * angle = 1 : gripper is closed
  */
@@ -231,20 +243,6 @@ void setPositionGripper(int angle) {
     SERVO_TARGET[SERVO_GRIPPER] = angle ? SERVO_DEPLOYED[SERVO_GRIPPER] : SERVO_MIN[SERVO_GRIPPER];
   } else if (angle >= 2 && angle <= 180) {
     SERVO_TARGET[SERVO_GRIPPER] = angle;
-  }
-}
-
-/*
- * angle = 0 : arm is up
- * angle = 1 : arm is down
- */
-void setRotationArm(int angle) {
-  if (angle == 0 || angle == 1) {
-    SERVO_TARGET[SERVO_ARM] = (angle) ? SERVO_DEPLOYED[SERVO_ARM] : SERVO_MIN[SERVO_ARM];
-    armHasPriority = angle ? 1 : 0;
-  } else if (angle >= 2 && angle <= SERVO_DEPLOYED[SERVO_ARM]) {
-    SERVO_TARGET[SERVO_ARM] = angle;
-    armHasPriority = (angle > 5) ? 1 : 0;
   }
 }
 
@@ -294,9 +292,9 @@ void writeServos() {
     lastServoWrite = time;
 
     // Servo translation forks
-    if (allowedFeedbackForks + 70 < feedbackMeasured) {  // Pulls forks inward
+    if (allowedFeedbackForks + 60 < feedbackMeasured) {  // Pulls forks inward
       SERVO_ALLOWED[SERVO_FORKS]++;
-    } else if (allowedFeedbackForks - 16 > feedbackMeasured) {  // Push forks outward
+    } else if (allowedFeedbackForks - 10 > feedbackMeasured) {  // Push forks outward
       SERVO_ALLOWED[SERVO_FORKS]--;
     } else if (SERVO_TARGET[SERVO_FORKS] > SERVO_ALLOWED[SERVO_FORKS]) {
       SERVO_ALLOWED[SERVO_FORKS]++;
@@ -369,7 +367,7 @@ void recvWithStartEndMarkers() {
         recvInProgress = false;
         ndx = 0;
         newData = true;
-        Serial.printf("Message received: %s\n", receivedChars);
+        //Serial.printf("Message received: %s\n", receivedChars);
       }
     } else if (rc == startMarker) {
       recvInProgress = true;
@@ -381,10 +379,11 @@ void handleCommand(char *string) {
   char command;
   int value;
   sscanf(string, "%c-%d", &command, &value);
+  DBG_PRINTF("Command received : %s\n", string);
 
   switch (command) {
     case 'A':
-      setRotationArm(value);
+      setDeployedArm(value);
       break;
     case 'D':
       stepperPlant.disableOutputs();
@@ -406,15 +405,17 @@ void handleCommand(char *string) {
     case 'G':  // Plants gripper
       setPositionGripper(value);
       break;
+    case 'H':  // homing steppers
+      setupSteppers();
     case 'O':
       DBG_PRINTLN("Preparing for power down");
       // set all variables to park forks and servo if needed
       break;
     case 'S':
-      setupSteppers();
+      setState(value);
       break;
     case 'T':  // Forks translation
-      setTranslationForks(value);
+      setDeployedForks(value);
       break;
     case 'W':
       setSpeedWheel(value);
@@ -423,7 +424,6 @@ void handleCommand(char *string) {
       DBG_PRINTLN("Command not recognized !");
       break;
   }
-  DBG_PRINTF("Command received : %s\n", string);
 }
 
 void setupSteppers() {
