@@ -18,18 +18,18 @@ For example : to move the pot's fork to 75 mm from the floor we will send "<F-75
 - E-x : enable stepper motor drivers (also does a homing)
    - x : whatever
   
-- F-x : set lower fork (pot's fork) height in mm
+- F-x : sets lower fork (pot's fork) height in mm
    - x >= 0
  
-- f-x : set upper fork (plant's fork) height in mm
+- f-x : sets upper fork (plant's fork) height in mm
    - x >= 0
 
-- G-x : set gripper position
+- G-x : sets gripper position
    - x = 0 : gripper open (0°)
    - x = 1 : gripper closed (180°)
    - 2 <= x <= 180 : set servo angle
 
-- S-x : set actuators State
+- S-x : sets actuators State
    - x = 0 : retracted
    - x = 1 : fork deployed
    - x = 2 : arm deployed
@@ -37,7 +37,7 @@ For example : to move the pot's fork to 75 mm from the floor we will send "<F-75
 - T-x : sets angle to which the forks moves when they are deployed
    - x : value between min and max for the forks's servo
 
-- W-x : set wheel speed
+- W-x : sets wheel speed
    - -50 <= x < 0 : wheel turns counterclockwise
    - x = 0 : wheel is stopped
    - 0 < x <= 50 : wheel turns clockwise
