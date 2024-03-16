@@ -20,7 +20,7 @@ const int feedbackPin = 24;  // Tx J4, feedback from servo is on 3.3V
 const int SERVO_PIN[] = { 3, 4, 5, 6 };
 // Changing the rotation direction is done in servo.attach() by reversing the min pulse width and max pulse width
 const int SERVO_MIN[] = { 0, 0, 0, -50 };
-const int SERVO_DEPLOYED[] = { 155, 180, 105, 0 };  // if changes value fork SERVO_FORKS need to change feedback too !
+int SERVO_DEPLOYED[] = { 155, 180, 105, 0 };  // if changes value fork SERVO_FORKS need to change feedback too !
 const int SERVO_MAX[] = { 170, 180, 115, 50 };      // SERVO_MAX[3] = -SERVO_MIN[3]
 int SERVO_TARGET[] = { 0, 0, 0, 90 };
 int SERVO_ALLOWED[] = { 0, 0, 0, 0 };
@@ -210,6 +210,18 @@ void forksRetracted() {
 void armRetracted() {
   SERVO_TARGET[SERVO_ARM] = SERVO_MIN[SERVO_ARM];
   SERVO_TARGET[SERVO_WHEEL] = SERVO_DEPLOYED[SERVO_WHEEL];
+}
+
+void setDeployedArm(int angle){
+  if(angle >= SERVO_MIN[SERVO_ARM] && angle <= SERVO_MAX[SERVO_ARM]){
+    SERVO_DEPLOYED[SERVO_ARM] = angle;
+  }
+}
+
+void setDeployedForks(int angle){
+  if(angle >= SERVO_MIN[SERVO_FORKS] && angle <= SERVO_MAX[SERVO_FORKS]){
+    SERVO_DEPLOYED[SERVO_FORKS] = angle;
+  }
 }
 
 /*
@@ -405,7 +417,7 @@ void handleCommand(char *string) {
     case 'G':  // Plants gripper
       setPositionGripper(value);
       break;
-    case 'H':  // homing steppers
+    case 'H':  // steppers setup and homing
       setupSteppers();
     case 'O':
       DBG_PRINTLN("Preparing for power down");
