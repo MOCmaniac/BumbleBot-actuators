@@ -414,7 +414,7 @@ void handleCommand(char *string) {
     case 'S':
       setState(value);
       break;
-    case 'T':  // Forks translation
+    case 'T':
       setDeployedForks(value);
       break;
     case 'W':
