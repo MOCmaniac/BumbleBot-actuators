@@ -16,14 +16,15 @@ const int dirPlantPin = 18;
 
 
 // defines servo pin number (from pin 3 to 8)
+// Servo forks - servo gripper - servo arm - servo wheel
 const int feedbackPin = 24;  // Tx J4, feedback from servo is on 3.3V
 const int SERVO_PIN[] = { 3, 4, 5, 6 };
 // Changing the rotation direction is done in servo.attach() by reversing the min pulse width and max pulse width
-const int SERVO_MIN[] = { 0, 0, 0, -50 };
-int SERVO_DEPLOYED[] = { 155, 180, 105, 0 };  // if changes value fork SERVO_FORKS need to change feedback too !
-const int SERVO_MAX[] = { 170, 180, 115, 50 };      // SERVO_MAX[3] = -SERVO_MIN[3]
-int SERVO_TARGET[] = { 0, 0, 0, 90 };
-int SERVO_ALLOWED[] = { 0, 0, 0, 0 };
+const int SERVO_MIN[] = { 0, 0, 58, -50 };
+int SERVO_DEPLOYED[] = { 158, 180, 162, 0 };  // if changes value fork SERVO_FORKS need to change feedback too !
+const int SERVO_MAX[] = { 180, 180, 180, 50 };      // SERVO_MAX[3] = -SERVO_MIN[3]
+int SERVO_TARGET[] = { 0, 0, 58, 0 };
+int SERVO_ALLOWED[] = { 0, 0, 58, 0 };
 
 unsigned long lastServoUpdate = 0;
 unsigned int timeout = 15000;
@@ -45,8 +46,8 @@ const int homingSpeed = 5000;  // max found : 16000 steps/second
 const int forkSpeed = 10000;
 const int forkAcceleration = 40e3;  // in steps/second²
 int homingCompleted = 0;
-int maxHeight = 100;
-int parkingHeight = 17;
+int maxHeight = 136;
+int parkingHeight = 0.2*maxHeight; // should be adapted if maxHeight is changed
 
 const int stepsPerRev = 200;
 const int microstepping = 8;
@@ -303,10 +304,10 @@ void writeServos() {
   if (time - lastServoWrite > 3) {  // 3
     lastServoWrite = time;
 
-    // Servo translation forks
+    // Servo translation forks (force servo)
     if (allowedFeedbackForks + 60 < feedbackMeasured) {  // Pulls forks inward
       SERVO_ALLOWED[SERVO_FORKS]++;
-    } else if (allowedFeedbackForks - 10 > feedbackMeasured) {  // Push forks outward
+    } else if (allowedFeedbackForks - 20 > feedbackMeasured) {  // Push forks outward
       SERVO_ALLOWED[SERVO_FORKS]--;
     } else if (SERVO_TARGET[SERVO_FORKS] > SERVO_ALLOWED[SERVO_FORKS]) {
       SERVO_ALLOWED[SERVO_FORKS]++;
@@ -486,11 +487,12 @@ void setupServos() {
 
   servoGripper.attach(SERVO_PIN[SERVO_GRIPPER], 2500, 500);  // datasheet 500-2500
 
-  //servoArm.attach(SERVO_PIN[SERVO_ARM], 2320, 800);  // datasheet 700-2300. Tested from 740 to 2380 without stalling.
-  servoArm.attach(SERVO_PIN[SERVO_ARM], 2500, 500);
+  servoArm.attach(SERVO_PIN[SERVO_ARM], 2320, 800);  // datasheet 700-2300. Tested from 740 to 2380 without stalling.
+  //servoArm.attach(SERVO_PIN[SERVO_ARM], 2500, 500); // used with the 9g servo for testing
 
 
   servoWheel.attach(SERVO_PIN[SERVO_WHEEL], 1400, 1600);  // datasheet 500-2500
+  setSpeedWheel(0);
 
   DBG_PRINTF("Min feedback : %d\t deployed feedback : %d\n", minFeedback, deployedFeedback);
   calibration(&servoForks, SERVO_MIN[SERVO_FORKS], &minFeedback);
