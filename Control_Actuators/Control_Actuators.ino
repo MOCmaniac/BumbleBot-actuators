@@ -21,19 +21,19 @@ const int feedbackPin = 24;  // Tx J4, feedback from servo is on 3.3V
 const int SERVO_PIN[] = { 3, 4, 5, 6 };
 // Changing the rotation direction is done in servo.attach() by reversing the min pulse width and max pulse width
 const int SERVO_MIN[] = { 0, 0, 58, -50 };
-int SERVO_DEPLOYED[] = { 158, 180, 162, 0 };  // if changes value fork SERVO_FORKS need to change feedback too !
-const int SERVO_MAX[] = { 180, 180, 180, 50 };      // SERVO_MAX[3] = -SERVO_MIN[3]
+int SERVO_DEPLOYED[] = { 158, 180, 162, 0 };    // if changes value fork SERVO_FORKS need to change feedback too !
+const int SERVO_MAX[] = { 180, 180, 180, 50 };  // SERVO_MAX[3] = -SERVO_MIN[3]
 int SERVO_TARGET[] = { 0, 0, 58, 0 };
 int SERVO_ALLOWED[] = { 0, 0, 58, 0 };
 
 unsigned long lastServoUpdate = 0;
-unsigned int timeout = 15000;
+unsigned int timeout = 12000;
 int allowedFeedbackForks = 0;
 int angleMeasured = 0;
 int feedbackMeasured = 0;
-int minFeedback = 600;  // Based on a 12 bits resolution
-int deployedFeedback = 2225; // 135°:2010 - 155°:2225
-int maxFeedback = 2485;  // 180° : 2485
+int minFeedback = 600;        // Based on a 12 bits resolution
+int deployedFeedback = 2225;  // 135°:2010 - 155°:2225
+int maxFeedback = 2485;       // 180° : 2485
 
 
 // µs1 = 32, µs2 = 31, µs3 = 30, µs4 = 27
@@ -47,7 +47,7 @@ const int forkSpeed = 10000;
 const int forkAcceleration = 40e3;  // in steps/second²
 int homingCompleted = 0;
 int maxHeight = 136;
-int parkingHeight = 0.2*maxHeight; // should be adapted if maxHeight is changed
+int parkingHeight = 0.2 * maxHeight;  // should be adapted if maxHeight is changed
 
 const int stepsPerRev = 200;
 const int microstepping = 8;
@@ -64,7 +64,8 @@ const int LEDPin = 13;
 int LEDState = HIGH;
 unsigned long LEDCurrentDelay = 1000;
 const unsigned long LEDDelay = 500;
-const unsigned long LEDDelayWarning = 100;
+const unsigned long LEDDelayWarning = 250;
+const unsigned long LEDDelayError = 100;
 unsigned long previousLED = 0;
 
 enum servo {
@@ -74,16 +75,22 @@ enum servo {
   SERVO_WHEEL
 };
 
-enum states {
+typedef enum {  // index can't be negative for the array
   RETRACTED = 0,
   FORKS = 1,
   ARM = 2,
-};
+  UNCALIBRATED = 3,
+  CALIBRATING = 4,
+  ERROR = 5,
+} systemStates;
 
 const char *stateNames[] = {
   "RETRACTED",
   "FORKS",
-  "ARM"
+  "ARM",
+  "UNCALIBRATED",
+  "CALIBRATING",
+  "ERROR"
 };
 
 
@@ -102,7 +109,7 @@ PWMServo servoGripper;
 PWMServo servoArm;
 PWMServo servoWheel;
 
-enum states state = RETRACTED;
+systemStates systemState = UNCALIBRATED;
 
 void setup() {
   SERIAL_BEGIN(115200);
@@ -113,20 +120,6 @@ void setup() {
 
   pinMode(microswitchPotPin, INPUT_PULLUP);
   pinMode(microswitchPlantPin, INPUT_PULLUP);
-
-  setupSteppers();
-  if (homingCompleted) {
-    setTargetForkPot(parkingHeight);
-    setTargetForkPlant(parkingHeight);
-    stepperPlant.moveTo(targetPositionForkPlant);
-    stepperPot.moveTo(targetPositionForkPot);
-    while (stepperPlant.isRunning() && stepperPot.isRunning()) {
-      stepperPlant.run();
-      stepperPot.run();
-    }
-    setupServos();
-  }
-  setState(RETRACTED);
 }
 
 void loop() {
@@ -144,7 +137,6 @@ void loop() {
     newData = false;
   }
 
-  //handleSystem();
   handleState();
 
   readServo(0);
@@ -154,22 +146,36 @@ void loop() {
   stepperPot.run();
 }
 
-void setState(states newState) {
-  state = newState;
+void setState(systemStates newState) {
+  systemState = newState;
 }
 
 void handleState() {
-  static int lastState = -1;
-  if (state != lastState) {
-    lastState = state;
-    DBG_PRINTF("New state : %s\n", stateNames[state]);
+  static int lastSystemState = -10;
+  if (systemState != lastSystemState) {
+    lastSystemState = systemState;
+    DBG_PRINTF("New state : %s\n", stateNames[systemState]);
   }
-  switch (state) {
+  switch (systemState) {
+    case UNCALIBRATED:
+      LEDCurrentDelay = 1000;
+      isStartingSequence();
+      break;
+    case CALIBRATING:
+      LEDCurrentDelay = 2000;
+      startingSequence();
+      break;
+    case ERROR:
+      LEDCurrentDelay = LEDDelayError;
+      // Does nothing for now
+      break;
     case RETRACTED:
+      LEDCurrentDelay = LEDDelay;
       forksRetracted();
       armRetracted();
       break;
     case ARM:
+      LEDCurrentDelay = LEDDelay;
       forksRetracted();
 
       if (SERVO_ALLOWED[SERVO_FORKS] < SERVO_MIN[SERVO_FORKS] + 5) {
@@ -177,6 +183,7 @@ void handleState() {
       }
       break;
     case FORKS:
+      LEDCurrentDelay = LEDDelay;
       armRetracted();
       if (SERVO_ALLOWED[SERVO_ARM] < SERVO_MIN[SERVO_ARM] + 5) {
         SERVO_TARGET[SERVO_FORKS] = SERVO_DEPLOYED[SERVO_FORKS];
@@ -213,14 +220,76 @@ void armRetracted() {
   SERVO_TARGET[SERVO_WHEEL] = SERVO_DEPLOYED[SERVO_WHEEL];
 }
 
-void setDeployedArm(int angle){
-  if(angle >= SERVO_MIN[SERVO_ARM] && angle <= SERVO_MAX[SERVO_ARM]){
+/*
+ * Sequence : both switch released, both switch pressed for more than 2s, both released for 1s then sequence enabled
+ *            state = 1             state = 2           state = 3         state = 4     state = 5
+ * If sequence is correct, initialize starting sequence
+ */
+void isStartingSequence() {
+  static unsigned long time = 0;
+  static int state = 0;
+
+  switch (state) {
+    case 0:
+      if (!readMicroswitch(microswitchPlantPin) && !readMicroswitch(microswitchPotPin)) {
+        state = 1;
+      }
+      break;
+    case 1:
+      if (readMicroswitch(microswitchPlantPin) && readMicroswitch(microswitchPotPin)) {
+        state = 2;
+        time = millis();
+      }
+      break;
+    case 2:
+      if (millis() - time >= 2000) {
+        state = 3;
+      }
+      break;
+    case 3:
+      if (!readMicroswitch(microswitchPlantPin) && !readMicroswitch(microswitchPotPin)) {
+        state = 4;
+        time = millis();
+      }
+      break;
+    case 4:
+      if (millis() - time >= 1000) {
+        state = 5;
+        systemState = CALIBRATING;
+      }
+      break;
+    default:
+      state = 0;
+      break;
+  }
+}
+
+void startingSequence() {
+  setupSteppers();
+  if (homingCompleted) {
+    setTargetForkPot(parkingHeight);
+    setTargetForkPlant(parkingHeight);
+    stepperPlant.moveTo(targetPositionForkPlant);
+    stepperPot.moveTo(targetPositionForkPot);
+    while (stepperPlant.isRunning() && stepperPot.isRunning()) {
+      stepperPlant.run();
+      stepperPot.run();
+    }
+    setupServos();
+    setState(RETRACTED);
+  } else {
+    setState(ERROR);
+  }
+}
+
+void setDeployedArm(int angle) {
+  if (angle >= SERVO_MIN[SERVO_ARM] && angle <= SERVO_MAX[SERVO_ARM]) {
     SERVO_DEPLOYED[SERVO_ARM] = angle;
   }
 }
 
-void setDeployedForks(int angle){
-  if(angle >= SERVO_MIN[SERVO_FORKS] && angle <= SERVO_MAX[SERVO_FORKS]){
+void setDeployedForks(int angle) {
+  if (angle >= SERVO_MIN[SERVO_FORKS] && angle <= SERVO_MAX[SERVO_FORKS]) {
     SERVO_DEPLOYED[SERVO_FORKS] = angle;
   }
 }
@@ -301,7 +370,7 @@ void writeServos() {
   static int pwm = 0;
 
   unsigned long time = millis();
-  if (time - lastServoWrite > 3) {  // 3
+  if (time - lastServoWrite > 5) {  // 3
     lastServoWrite = time;
 
     // Servo translation forks (force servo)
@@ -309,7 +378,8 @@ void writeServos() {
       SERVO_ALLOWED[SERVO_FORKS]++;
     } else if (allowedFeedbackForks - 20 > feedbackMeasured) {  // Push forks outward
       SERVO_ALLOWED[SERVO_FORKS]--;
-    } else if (SERVO_TARGET[SERVO_FORKS] > SERVO_ALLOWED[SERVO_FORKS]) {
+    } else
+    if (SERVO_TARGET[SERVO_FORKS] > SERVO_ALLOWED[SERVO_FORKS]) {
       SERVO_ALLOWED[SERVO_FORKS]++;
     } else if (SERVO_TARGET[SERVO_FORKS] < SERVO_ALLOWED[SERVO_FORKS]) {
       SERVO_ALLOWED[SERVO_FORKS]--;
@@ -398,6 +468,9 @@ void handleCommand(char *string) {
     case 'A':
       setDeployedArm(value);
       break;
+    case 'B':
+      setState(CALIBRATING);
+      break;
     case 'D':
       stepperPlant.disableOutputs();
       stepperPot.disableOutputs();
@@ -425,7 +498,7 @@ void handleCommand(char *string) {
       // set all variables to park forks and servo if needed
       break;
     case 'S':
-      setState(value);
+      setState((systemStates) value);
       break;
     case 'T':
       setDeployedForks(value);
@@ -461,15 +534,18 @@ void setupSteppers() {
   stepperPot.setAcceleration(40000.0);
 
   homingCompleted = homing(homingSpeed);
-  if (!homingCompleted) DBG_PRINTLN("Homing forks failed");
-
-  LEDCurrentDelay = homingCompleted ? LEDDelay : LEDDelayWarning;
   if (homingCompleted) {
-    stepperPlant.setMaxSpeed(forkSpeed);  // in steps/second
+    DBG_PRINTLN("Homing forks successful");
+    stepperPlant.setCurrentPosition(steps - 60);  // define position
+    stepperPot.setCurrentPosition(steps);         // define position
+    stepperPlant.setMaxSpeed(forkSpeed);          // in steps/second
     stepperPot.setMaxSpeed(forkSpeed);
+    systemState = RETRACTED;
   } else {
+    DBG_PRINTLN("Homing forks failed");
     stepperPlant.disableOutputs();
     stepperPot.disableOutputs();
+    systemState = ERROR;
   }
 }
 
@@ -491,7 +567,7 @@ void setupServos() {
   //servoArm.attach(SERVO_PIN[SERVO_ARM], 2500, 500); // used with the 9g servo for testing
 
 
-  servoWheel.attach(SERVO_PIN[SERVO_WHEEL], 1400, 1600);  // datasheet 500-2500
+  servoWheel.attach(SERVO_PIN[SERVO_WHEEL], 1300, 1700);  // datasheet 500-2500
   setSpeedWheel(0);
 
   DBG_PRINTF("Min feedback : %d\t deployed feedback : %d\n", minFeedback, deployedFeedback);
@@ -514,6 +590,7 @@ int homing(int speed) {
     stepperPot.setCurrentPosition(0);
     stepperPot.runToNewPosition(-steps * 0.03);
   }
+  if (statusPot == 0) return false;
 
   DBG_PRINTLN("Moving plant's fork away from the switch");
   int statusPlant = homingMove(&stepperPlant, -speed, steps * 0.1, microswitchPlantPin, true);
@@ -521,24 +598,21 @@ int homing(int speed) {
     stepperPlant.setCurrentPosition(0);
     stepperPlant.runToNewPosition(-steps * 0.03);
   }
+  if (statusPlant == 0) return false;
 
   if (statusPlant) {
     DBG_PRINTLN("Moving plant's fork towards the switch");
     statusPlant = homingMove(&stepperPlant, speed, steps * 1.1, microswitchPlantPin, false);
   }
+  if (statusPlant == 0) return false;
+
   if (statusPot) {
     DBG_PRINTLN("Moving pot's fork towards  the switch");
     statusPot = homingMove(&stepperPot, speed, steps * 1.1, microswitchPotPin, false);
   }
+  if (statusPot == 0) return false;
 
-  if (statusPlant) {
-    stepperPlant.setCurrentPosition(steps - 60);  // define position
-  }
-  if (statusPot) {
-    stepperPot.setCurrentPosition(steps);  // define position
-  }
-
-  return statusPlant && statusPot;
+  return true;
 }
 
 /*
