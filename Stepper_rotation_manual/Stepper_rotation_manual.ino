@@ -65,6 +65,7 @@ void setup() {
   DBG_PRINTLN("Setups done");
   DBG_PRINTF("\nCURRENT POSITION PLANT : %d\n", targetPositionForkPlant);
   DBG_PRINTF("CURRENT POSITION POT : %d\n", targetPositionForkPot);
+  DBG_PRINTLN("Higher numbers wind the cable");
 }
 
 void loop() {
