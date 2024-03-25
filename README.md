@@ -19,10 +19,10 @@ For example : to move the pot's fork to 75 mm from the floor we will send "<F-75
    - x : whatever
   
 - F-x : sets lower fork (pot's fork) height in mm
-   - x >= 0
+   - 0 <= x <= 142
  
 - f-x : sets upper fork (plant's fork) height in mm
-   - x >= 0
+   - 0 <= x <= 142
 
 - G-x : sets gripper position
    - x = 0 : gripper open (0°)
