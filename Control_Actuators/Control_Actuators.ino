@@ -46,7 +46,7 @@ const int homingSpeed = 5000;  // max found : 16000 steps/second
 const int forkSpeed = 10000;
 const int forkAcceleration = 40e3;  // in steps/second²
 int homingCompleted = 0;
-int maxHeight = 136;
+int maxHeight = 142;
 int parkingHeight = 0.2 * maxHeight;  // should be adapted if maxHeight is changed
 
 const int stepsPerRev = 200;
